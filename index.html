@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no" />
+  <title>M JUMP</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@900&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #15002C;
+      --m: #81D8D0;
+      --danger: #FF0000;
+      --semi: #732DDD;
+      --pixel-shadow: 4px 4px 0 rgba(0,0,0,0.45);
+    }
+
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: var(--bg);
+      color: var(--m);
+      font-family: 'Montserrat', system-ui, sans-serif;
+      touch-action: manipulation;
+    }
+
+    #gameWrap {
+      position: fixed;
+      inset: 0;
+      background: var(--bg);
+      display: grid;
+      place-items: center;
+    }
+
+    canvas {
+      width: 100vw;
+      height: 100vh;
+      display: block;
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+      background: transparent;
+    }
+
+    .overlay {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      gap: 20px;
+      text-align: center;
+      background: rgba(21, 0, 44, 0.78);
+      padding: 24px;
+      z-index: 5;
+    }
+
+    .hidden { display: none; }
+
+    .title {
+      font-size: clamp(36px, 9vw, 68px);
+      letter-spacing: 0.2em;
+      color: var(--m);
+      text-transform: uppercase;
+      text-shadow:
+        0 0 5px var(--m),
+        0 0 10px var(--m),
+        var(--pixel-shadow);
+    }
+
+    .subtitle {
+      font-size: clamp(18px, 4vw, 30px);
+      color: var(--m);
+      text-shadow: var(--pixel-shadow);
+    }
+
+    .pixel-btn {
+      border: 0;
+      cursor: pointer;
+      font-family: inherit;
+      font-weight: 900;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #15002C;
+      background: var(--m);
+      padding: 14px 26px;
+      font-size: clamp(16px, 4vw, 24px);
+      box-shadow: 0 0 12px var(--m), var(--pixel-shadow);
+      transform: translateY(0);
+      transition: transform 0.08s;
+      border-radius: 2px;
+    }
+
+    .pixel-btn:active { transform: translateY(2px); }
+  </style>
+</head>
+<body>
+  <div id="gameWrap">
+    <canvas id="game" aria-label="M Jump game"></canvas>
+  </div>
+
+  <section id="startScreen" class="overlay">
+    <h1 class="title">M JUMP</h1>
+    <p class="subtitle">Прыгай, уклоняйся и бей рекорды.</p>
+    <button id="playBtn" class="pixel-btn">Играть</button>
+  </section>
+
+  <section id="gameOverScreen" class="overlay hidden">
+    <h2 class="subtitle" style="font-size:clamp(24px,6vw,42px)">Увы, игра окончена</h2>
+    <p id="finalScore" class="subtitle">Счёт: 0</p>
+    <button id="retryBtn" class="pixel-btn">Ещё раз</button>
+  </section>
+
+<script>
+(() => {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+
+  const startScreen = document.getElementById('startScreen');
+  const gameOverScreen = document.getElementById('gameOverScreen');
+  const finalScore = document.getElementById('finalScore');
+  const playBtn = document.getElementById('playBtn');
+  const retryBtn = document.getElementById('retryBtn');
+
+  const COLORS = {
+    bg: '#15002C',
+    m: '#81D8D0',
+    red: '#FF0000',
+    semi: '#732DDD'
+  };
+
+  const state = {
+    running: false,
+    gameOver: false,
+    score: 0,
+    obstacleSpeed: 360,
+    time: 0,
+    spawnDelay: 0,
+    pressStart: 0,
+    pressing: false,
+    longBoostTime: 0,
+    justJumped: false,
+  };
+
+  const world = {
+    w: 1080,
+    h: 1920,
+    groundY: 0,
+    groundThickness: 15,
+    player: {
+      x: 170,
+      y: 0,
+      vy: 0,
+      size: 84,
+      gravity: 2400,
+      jumpImpulse: -900,
+      holdBoost: -2300,
+      maxHold: 0.22,
+      onGround: true
+    },
+    obstacles: []
+  };
+
+  function resize() {
+    const dpr = Math.max(1, Math.min(window.devicePixelRatio || 1, 2));
+    canvas.width = Math.floor(window.innerWidth * dpr);
+    canvas.height = Math.floor(window.innerHeight * dpr);
+    canvas.style.width = `${window.innerWidth}px`;
+    canvas.style.height = `${window.innerHeight}px`;
+
+    const portraitBase = 1080 / 1920;
+    const screenRatio = canvas.width / canvas.height;
+    if (screenRatio > portraitBase) {
+      world.h = 1920;
+      world.w = world.h * screenRatio;
+    } else {
+      world.w = 1080;
+      world.h = world.w / screenRatio;
+    }
+
+    world.groundY = world.h - 220;
+    world.player.y = Math.min(world.player.y, world.groundY - world.player.size);
+  }
+
+  function toScreenX(x) {
+    return x / world.w * canvas.width;
+  }
+
+  function toScreenY(y) {
+    return y / world.h * canvas.height;
+  }
+
+  function resetGame() {
+    state.running = true;
+    state.gameOver = false;
+    state.score = 0;
+    state.obstacleSpeed = 360;
+    state.time = 0;
+    state.spawnDelay = 0.9;
+    state.longBoostTime = 0;
+    state.justJumped = false;
+    world.obstacles.length = 0;
+    world.player.y = world.groundY - world.player.size;
+    world.player.vy = 0;
+    world.player.onGround = true;
+    gameOverScreen.classList.add('hidden');
+    startScreen.classList.add('hidden');
+  }
+
+  function startJump() {
+    if (!state.running || state.gameOver) return;
+    if (world.player.onGround) {
+      world.player.vy = world.player.jumpImpulse;
+      world.player.onGround = false;
+      state.longBoostTime = 0;
+      state.justJumped = true;
+    }
+  }
+
+  function updatePlayer(dt) {
+    const p = world.player;
+    if (!p.onGround) {
+      if (state.pressing && state.longBoostTime < p.maxHold && p.vy < 0) {
+        p.vy += p.holdBoost * dt;
+        state.longBoostTime += dt;
+      }
+      p.vy += p.gravity * dt;
+      p.y += p.vy * dt;
+    }
+
+    const groundTop = world.groundY - p.size;
+    if (p.y >= groundTop) {
+      p.y = groundTop;
+      p.vy = 0;
+      p.onGround = true;
+      state.longBoostTime = 0;
+      state.justJumped = false;
+    }
+  }
+
+  function chooseObstacleType() {
+    if (state.score >= 35) {
+      const r = Math.random();
+      if (r < 0.2) return 'ball';
+      if (r < 0.55) return 'semi';
+      return 'pillar';
+    }
+    if (state.score >= 20) {
+      return Math.random() < 0.3 ? 'ball' : 'pillar';
+    }
+    return 'pillar';
+  }
+
+  function hasGroundObstacleAhead() {
+    return world.obstacles.some(o => (o.type === 'pillar' || o.type === 'semi') && o.x > world.player.x);
+  }
+
+  function spawnObstacle() {
+    const type = chooseObstacleType();
+    const baseX = world.w + 120;
+
+    if (type === 'ball') {
+      if (hasGroundObstacleAhead()) return;
+      world.obstacles.push({
+        type,
+        x: baseX,
+        y: world.groundY - 380,
+        r: 30,
+        speedMul: 1.38,
+        passed: false
+      });
+      return;
+    }
+
+    if (type === 'semi') {
+      world.obstacles.push({
+        type,
+        x: baseX,
+        y: world.groundY,
+        minR: 22,
+        maxR: 110,
+        r: 22,
+        passed: false
+      });
+      return;
+    }
+
+    world.obstacles.push({
+      type: 'pillar',
+      x: baseX,
+      y: world.groundY,
+      w: 56,
+      h: 150,
+      passed: false
+    });
+  }
+
+  function rectHit(ax, ay, aw, ah, bx, by, bw, bh) {
+    return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
+  }
+
+  function circleRectHit(cx, cy, r, rx, ry, rw, rh) {
+    const nx = Math.max(rx, Math.min(cx, rx + rw));
+    const ny = Math.max(ry, Math.min(cy, ry + rh));
+    const dx = cx - nx;
+    const dy = cy - ny;
+    return dx * dx + dy * dy <= r * r;
+  }
+
+  function updateObstacles(dt) {
+    for (let i = world.obstacles.length - 1; i >= 0; i--) {
+      const o = world.obstacles[i];
+      const speed = state.obstacleSpeed * (o.speedMul || 1);
+      o.x -= speed * dt;
+
+      if (o.type === 'semi') {
+        const t = 1 - Math.max(0, Math.min(1, (o.x - world.player.x) / (world.w - world.player.x)));
+        o.r = o.minR + (o.maxR - o.minR) * t;
+      }
+
+      if (!o.passed && o.x < world.player.x - 14) {
+        o.passed = true;
+        state.score += 1;
+        if (state.score % 10 === 0) {
+          state.obstacleSpeed += 45;
+        }
+      }
+
+      if (o.x < -220) {
+        world.obstacles.splice(i, 1);
+      }
+    }
+
+    const minDelay = state.score >= 35 ? 0.8 : 0.95;
+    const maxDelay = state.score >= 35 ? 1.2 : 1.5;
+    state.spawnDelay -= dt;
+    if (state.spawnDelay <= 0) {
+      spawnObstacle();
+      state.spawnDelay = minDelay + Math.random() * (maxDelay - minDelay);
+    }
+  }
+
+  function checkCollisions() {
+    const p = world.player;
+    const px = p.x;
+    const py = p.y;
+    const ps = p.size;
+
+    for (const o of world.obstacles) {
+      if (o.type === 'pillar') {
+        if (rectHit(px + 8, py + 8, ps - 16, ps - 16, o.x, o.y - o.h, o.w, o.h)) return true;
+      } else if (o.type === 'ball') {
+        if (circleRectHit(o.x, o.y, o.r, px + 6, py + 6, ps - 12, ps - 12)) return true;
+      } else if (o.type === 'semi') {
+        if (circleRectHit(o.x, o.y, o.r, px + 8, py + 10, ps - 16, ps - 12) && py + ps > o.y - o.r) return true;
+      }
+    }
+    return false;
+  }
+
+  function endGame() {
+    state.running = false;
+    state.gameOver = true;
+    finalScore.textContent = `Счёт: ${state.score}`;
+    gameOverScreen.classList.remove('hidden');
+  }
+
+  function drawPillar(o) {
+    const x = toScreenX(o.x);
+    const y = toScreenY(o.y - o.h);
+    const w = toScreenX(o.w);
+    const h = toScreenY(o.h);
+    const rr = Math.min(w * 0.28, h * 0.2);
+
+    ctx.save();
+    ctx.fillStyle = COLORS.m;
+    ctx.shadowColor = COLORS.m;
+    ctx.shadowBlur = 14;
+    ctx.beginPath();
+    ctx.moveTo(x, y + h);
+    ctx.lineTo(x, y + rr);
+    ctx.quadraticCurveTo(x, y, x + rr, y);
+    ctx.lineTo(x + w - rr, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + rr);
+    ctx.lineTo(x + w, y + h);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawBall(o) {
+    const x = toScreenX(o.x);
+    const y = toScreenY(o.y);
+    const r = toScreenX(o.r);
+    ctx.save();
+    ctx.fillStyle = COLORS.red;
+    ctx.shadowColor = COLORS.red;
+    ctx.shadowBlur = 18;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawSemi(o) {
+    const x = toScreenX(o.x);
+    const y = toScreenY(o.y);
+    const r = toScreenX(o.r);
+    ctx.save();
+    ctx.fillStyle = COLORS.semi;
+    ctx.shadowColor = COLORS.semi;
+    ctx.shadowBlur = 16;
+    ctx.beginPath();
+    ctx.arc(x, y, r, Math.PI, Math.PI * 2);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawPlayer() {
+    const p = world.player;
+    const x = toScreenX(p.x);
+    const y = toScreenY(p.y);
+    const size = toScreenX(p.size);
+    ctx.save();
+    ctx.fillStyle = COLORS.m;
+    ctx.font = `900 ${size * 1.08}px Montserrat`;
+    ctx.textBaseline = 'top';
+    ctx.shadowColor = COLORS.m;
+    ctx.shadowBlur = 18;
+    ctx.fillText('M', x, y - size * 0.06);
+    ctx.restore();
+  }
+
+  function drawGround() {
+    const y = toScreenY(world.groundY);
+    const t = Math.max(2, toScreenY(world.groundThickness));
+    ctx.save();
+    ctx.fillStyle = COLORS.m;
+    ctx.shadowColor = COLORS.m;
+    ctx.shadowBlur = 12;
+    ctx.fillRect(0, y, canvas.width, t);
+    ctx.restore();
+  }
+
+  function drawScore() {
+    ctx.save();
+    ctx.fillStyle = COLORS.m;
+    ctx.font = `900 ${Math.max(24, canvas.width * 0.055)}px Montserrat`;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.shadowColor = COLORS.m;
+    ctx.shadowBlur = 12;
+    ctx.fillText(String(state.score), canvas.width * 0.06, canvas.height * 0.04);
+    ctx.restore();
+  }
+
+  function render() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    drawGround();
+    for (const o of world.obstacles) {
+      if (o.type === 'pillar') drawPillar(o);
+      if (o.type === 'ball') drawBall(o);
+      if (o.type === 'semi') drawSemi(o);
+    }
+    drawPlayer();
+    drawScore();
+  }
+
+  let lastTs = 0;
+  function loop(ts) {
+    if (!lastTs) lastTs = ts;
+    const dt = Math.min((ts - lastTs) / 1000, 0.033);
+    lastTs = ts;
+
+    if (state.running && !state.gameOver) {
+      state.time += dt;
+      updatePlayer(dt);
+      updateObstacles(dt);
+      if (checkCollisions()) endGame();
+    }
+
+    render();
+    requestAnimationFrame(loop);
+  }
+
+  function onPressStart(e) {
+    if (e.cancelable) e.preventDefault();
+    if (!state.running || state.gameOver) return;
+    state.pressing = true;
+    state.pressStart = performance.now();
+    startJump();
+  }
+
+  function onPressEnd(e) {
+    if (e && e.cancelable) e.preventDefault();
+    state.pressing = false;
+  }
+
+  const opts = { passive: false };
+  window.addEventListener('touchstart', onPressStart, opts);
+  window.addEventListener('touchend', onPressEnd, opts);
+  window.addEventListener('touchcancel', onPressEnd, opts);
+  window.addEventListener('mousedown', onPressStart);
+  window.addEventListener('mouseup', onPressEnd);
+  window.addEventListener('keydown', (e) => {
+    if (e.code === 'Space' || e.code === 'ArrowUp') {
+      onPressStart(e);
+    }
+  });
+  window.addEventListener('keyup', (e) => {
+    if (e.code === 'Space' || e.code === 'ArrowUp') {
+      onPressEnd(e);
+    }
+  });
+
+  playBtn.addEventListener('click', resetGame);
+  retryBtn.addEventListener('click', resetGame);
+  window.addEventListener('resize', resize);
+
+  resize();
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
